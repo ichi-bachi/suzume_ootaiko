@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>仙台すずめ踊り 大太鼓練習機</title>
+    <style>
+        body { background: #111; color: white; text-align: center; font-family: sans-serif; margin: 0; overflow: hidden; touch-action: manipulation; }
+        h1 { font-size: 24px; color: #e67e22; margin: 10px 0 5px; text-shadow: 2px 2px #000; }
+        #lane { position: relative; width: 100%; height: 140px; background: #000; border-top: 4px solid #555; border-bottom: 4px solid #555; margin: 15px 0; }
+        #target { position: absolute; left: 60px; width: 70px; height: 100%; border: 4px solid yellow; box-sizing: border-box; z-index: 10; border-radius: 50%; box-shadow: 0 0 10px yellow; }
+        .note { position: absolute; top: 30px; width: 70px; height: 70px; background: radial-gradient(circle, #ff4500, #b30000); border-radius: 50%; border: 2px solid white; line-height: 70px; font-weight: bold; z-index: 5; }
+        .measure-line { position: absolute; width: 2px; height: 100%; background: #444; z-index: 1; }
+        #judge-display { font-size: 40px; font-weight: bold; height: 50px; color: #ff0; }
+        #info { font-size: 18px; color: #0f0; margin: 5px; }
+        
+        /* ボタン類 */
+        .controls { margin-top: 10px; display: flex; justify-content: center; gap: 10px; }
+        button { padding: 15px 30px; font-size: 18px; color: white; border: none; border-radius: 30px; cursor: pointer; font-weight: bold; }
+        #start-btn { background: #e67e22; box-shadow: 0 4px #d35400; padding: 20px 60px; font-size: 24px; }
+        #pause-btn { background: #3498db; box-shadow: 0 4px #2980b9; display: none; }
+        #retry-btn { background: #e74c3c; box-shadow: 0 4px #c0392b; display: none; }
+        button:active { transform: translateY(2px); box-shadow: none; }
+    </style>
+</head>
+<body>
+
+    <h1>仙台すずめ踊り 大太鼓練習機</h1>
+    
+    <div id="info">スコア: 0</div>
+    <div id="judge-display">READY</div>
+    
+    <div id="lane"><div id="target"></div></div>
+    
+    <audio id="bgm" src="bgm.mp3" preload="auto"></audio>
+
+    <div class="controls">
+        <button id="start-btn" onclick="initGame()">演奏開始！</button>
+        <button id="pause-btn" onclick="togglePause()">一時停止</button>
+        <button id="retry-btn" onclick="retry()">リトライ</button>
+    </div>
+
+<script>
+const offset = 0;
+const bpm = 120;
+const secPerBeat = 60 / bpm;
+const scrollSpeed = 400;
+const targetX = 60;
+
+const tjaData = [
+    { m: "0000", beat: 4 }, { m: "0000", beat: 4 }, // 予備8拍
+    { m: "1010", beat: 4 },
+    { m: "1001000010001000", beat: 4 }, { m: "0001000010000000", beat: 4 },
+    { m: "1001000010001000", beat: 4 }, { m: "0001000010000000", beat: 4 },
+    { m: "1001000010001000", beat: 4 }, { m: "0001000010000000", beat: 4 },
+    { m: "100000000001000010000000", beat: 6 }, // 6/4
+    { m: "1001000010001000", beat: 4 }, { m: "0001000010000000", beat: 4 },
+    { m: "1001000010001000", beat: 4 }, { m: "0001000010000000", beat: 4 },
+    { m: "1001000010001000", beat: 4 }, { m: "0001000010000000", beat: 4 },
+    { m: "1001000010000000", beat: 4 }, { m: "1001000010001000", beat: 4 },
+    { m: "0001000010000000", beat: 4 }, { m: "1001000010001000", beat: 4 },
+    { m: "0001000010000000", beat: 4 }, { m: "1001000010001000", beat: 4 },
+    { m: "0001000010000000", beat: 4 }, { m: "1001000010001000", beat: 4 },
+    { m: "0001000010000000", beat: 4 }, { m: "1001000010001000", beat: 4 },
+    { m: "0001000010000000", beat: 4 }, { m: "1001000010001000", beat: 4 },
+    { m: "0001000010000000", beat: 4 }, { m: "1111", beat: 4 }, { m: "1110", beat: 4 }
+];
+
+let ctx, notes = [], startTime = 0, score = 0;
+let isPaused = false, pauseStartTime = 0, totalPausedTime = 0;
+let animationId;
+const audio = document.getElementById('bgm');
+
+function initGame() {
+    // 画面表示のリセット
+    document.getElementById('start-btn').style.display = 'none';
+    document.getElementById('pause-btn').style.display = 'inline-block';
+    document.getElementById('retry-btn').style.display = 'inline-block';
+    
+    if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+    
+    resetData();
+    audio.currentTime = 0.5;
+    audio.play();
+    startTime = ctx.currentTime;
+    totalPausedTime = 0;
+    isPaused = false;
+    
+    renderNotes();
+    update();
+}
+
+function resetData() {
+    score = 0;
+    document.getElementById('info').innerText = "スコア: 0";
+    document.getElementById('judge-display').innerText = "演奏中";
+    const lane = document.getElementById('lane');
+    // 古いノーツを削除
+    const oldNotes = lane.querySelectorAll('.note, .measure-line');
+    oldNotes.forEach(el => el.remove());
+    notes = [];
+}
+
+function renderNotes() {
+    let nextNoteTime = startTime;
+    const lane = document.getElementById('lane');
+
+    tjaData.forEach(measure => {
+        const line = document.createElement('div');
+        line.className = 'measure-line';
+        lane.appendChild(line);
+        notes.push({ el: line, t: nextNoteTime, isNote: false });
+
+        const step = (measure.beat * secPerBeat) / measure.m.length;
+        for(let i=0; i < measure.m.length; i++) {
+            if(measure.m[i] === '1') {
+                const div = document.createElement('div');
+                div.className = 'note';
+                div.innerText = "ドン";
+                lane.appendChild(div);
+                notes.push({ el: div, t: nextNoteTime, isNote: true, hit: false });
+            }
+            nextNoteTime += step;
+        }
+    });
+}
+
+function update() {
+    if (isPaused) return;
+
+    const now = ctx.currentTime - totalPausedTime;
+    notes.forEach(n => {
+        const x = targetX + (n.t - now) * scrollSpeed;
+        n.el.style.left = x + 'px';
+        if (n.isNote && !n.hit && x < (targetX - 50)) {
+            n.hit = true;
+            showJudge("不可...", "#888");
+        }
+    });
+    animationId = requestAnimationFrame(update);
+}
+
+function togglePause() {
+    const btn = document.getElementById('pause-btn');
+    if (!isPaused) {
+        // 一時停止
+        isPaused = true;
+        audio.pause();
+        pauseStartTime = ctx.currentTime;
+        btn.innerText = "再開";
+        cancelAnimationFrame(animationId);
+    } else {
+        // 再開
+        isPaused = false;
+        audio.play();
+        totalPausedTime += (ctx.currentTime - pauseStartTime);
+        btn.innerText = "一時停止";
+        update();
+    }
+}
+
+function retry() {
+    cancelAnimationFrame(animationId);
+    audio.pause();
+    initGame();
+    document.getElementById('pause-btn').innerText = "一時停止";
+}
+
+function showJudge(txt, color) {
+    const j = document.getElementById('judge-display');
+    j.innerText = txt;
+    j.style.color = color;
+}
+
+function handleInput(e) {
+    if(e) e.preventDefault();
+    if(!ctx || isPaused) return;
+    
+    // 叩いた音
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.frequency.value = 150;
+    g.gain.setValueAtTime(0.5, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.2);
+    o.connect(g); g.connect(ctx.destination);
+    o.start(); o.stop(ctx.currentTime + 0.2);
+
+    const now = ctx.currentTime - totalPausedTime;
+    const n = notes.find(x => x.isNote && !x.hit && Math.abs(x.t - now) < 0.15);
+    if (n) {
+        const diff = Math.abs(n.t - now);
+        n.hit = true;
+        n.el.style.display = 'none';
+        if (diff < 0.06) { showJudge("良！", "#ff0"); score += 100; }
+        else { showJudge("可", "#0f0"); score += 50; }
+        document.getElementById('info').innerText = "スコア: " + score;
+    }
+}
+
+window.addEventListener('keydown', (e) => { if(e.key === 'f') handleInput(); });
+window.addEventListener('touchstart', handleInput, { passive: false });
+</script>
+</body>
+</html>
